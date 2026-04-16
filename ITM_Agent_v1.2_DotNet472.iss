@@ -228,7 +228,6 @@ begin
 
   ApplyLogoSettings(WizardForm.WizardBitmapImage);
   ApplyLogoSettings(FindFinishedLogoImage());
-
   EqpidPage := CreateInputQueryPage(
     wpSelectDir,
     '장비 ID 설정',
@@ -254,12 +253,11 @@ begin
   lblProxyWarning.Top := chkUseProxy.Top + 25;
   lblProxyWarning.Left := 20;
   lblProxyWarning.Width := NetworkPage.SurfaceWidth - 40;
-  lblProxyWarning.Height := 35; 
+  lblProxyWarning.Height := 35;
   lblProxyWarning.AutoSize := False; 
   lblProxyWarning.WordWrap := True;
   lblProxyWarning.Font.Color := clRed;
   lblProxyWarning.Caption := '※ 주의: Main 장비의 내부망을 이용하여 네트워크를 연결해야 하는 환경인 경우, 필히 위 옵션을 체크하고 Main 장비의 IP를 입력해 주십시오.';
-
   lblProxyIP := TNewStaticText.Create(WizardForm);
   lblProxyIP.Parent := NetworkPage.Surface;
   lblProxyIP.Top := lblProxyWarning.Top + lblProxyWarning.Height + 10; 
@@ -274,7 +272,6 @@ begin
   txtProxyIP.Text := '172.20.60.200';
 
   chkUseProxyClick(chkUseProxy);
-
   ArchiveDirPage := CreateInputDirPage(
     NetworkPage.ID,
     '데이터 아카이브 경로 설정',
@@ -301,7 +298,6 @@ begin
   if CurPageID = EqpidPage.ID then
   begin
     EqpidPage.Values[0] := Uppercase(Trim(EqpidPage.Values[0]));
-
     if EqpidPage.Values[0] = '' then
     begin
       MsgBox('Eqpid(장비 ID)는 필수 입력 항목입니다.', mbError, MB_OK);
@@ -342,7 +338,6 @@ begin
     SettingsPath := ExpandConstant('{app}\Settings.ini');
 
     SetIniString('Eqpid', 'Eqpid', EqpidPage.Values[0], SettingsPath);
-
     if chkUseProxy.Checked then
     begin
       SetIniString('Network', 'UseProxy', '1', SettingsPath);
@@ -426,6 +421,70 @@ begin
     Result := True;
 end;
 
+// ------------------------------------------------------------------
+// 신규 추가: 버전 문자열에서 숫자와 점만 추출하는 정규화 함수
+// ------------------------------------------------------------------
+function NormalizeVersion(V: String): String;
+var
+  i: Integer;
+begin
+  Result := '';
+  for i := 1 to Length(V) do
+  begin
+    // 숫자이거나 점(.)인 경우만 결과에 포함
+    if ((V[i] >= '0') and (V[i] <= '9')) or (V[i] = '.') then
+    begin
+      Result := Result + V[i];
+    end;
+  end;
+  Result := Trim(Result);
+end;
+
+// ------------------------------------------------------------------
+// 신규 추가: 설치 시작 전 최신 버전 확인 로직 (Fail-Fast & Fail-Open)
+// ------------------------------------------------------------------
+function CheckLatestVersion(CurrentVersion: String): Boolean;
+var
+  WinHttpReq: Variant;
+  ResponseStr: String; 
+  LatestRaw: String;
+  CleanLatest: String;
+  CleanCurrent: String;
+begin
+  Result := True;
+  try
+    WinHttpReq := CreateOleObject('WinHttp.WinHttpRequest.5.1');
+    WinHttpReq.SetTimeouts(1000, 1000, 1000, 1000);
+    
+    // TODO: 앞서 테스트 완료하신 API 서버 주소를 YOUR_API_SERVER_IP 자리에 입력하세요.
+    WinHttpReq.Open('GET', 'http://YOUR_API_SERVER_IP:8081/api/agent/latest-version', False);
+    WinHttpReq.Send('');
+    
+    if WinHttpReq.Status = 200 then
+    begin
+      ResponseStr := WinHttpReq.ResponseText;
+      LatestRaw := Trim(ResponseStr);
+      
+      // 강력한 정제 로직 적용 (v 접두사 및 특수문자 제거)
+      CleanLatest := NormalizeVersion(LatestRaw);
+      CleanCurrent := NormalizeVersion(CurrentVersion);
+
+      // 정제된 문자열(예: 0.1.2.1)을 기준으로 비교
+      if (CleanLatest <> '') and (CleanLatest <> CleanCurrent) then
+      begin
+        if MsgBox('💡 안내: 현재 설치하려는 ITM Agent는 구버전(v' + CleanCurrent + ')입니다.' + #13#10 +
+                  '서버의 최신 버전은 v' + CleanLatest + ' 입니다.' + #13#10 + #13#10 +
+                  '이대로 구버전 설치를 계속 진행하시겠습니까?', mbInformation, MB_YESNO) = IDNO then
+        begin
+          Result := False;
+        end;
+      end;
+    end;
+  except
+    // 네트워크 오류 발생 시 설치 흐름 방해 금지
+  end;
+end;
+
 function InitializeSetup(): Boolean;
 begin
   if not DirExists('D:\') then
@@ -435,6 +494,15 @@ begin
       '설치를 중단합니다.',
       mbCriticalError, MB_OK
     );
+    Result := False;
+    Exit;
+  end;
+
+  // ------------------------------------------------------------------
+  // 신규 추가: 실행 즉시 버전 체크 호출 (DotNet472 파일에도 동일하게 적용)
+  // ------------------------------------------------------------------
+  if not CheckLatestVersion('{#SetupSetting("AppVersion")}') then
+  begin
     Result := False;
     Exit;
   end;
